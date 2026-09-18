@@ -35,6 +35,10 @@ export function LoadPanel() {
   };
 
   const load = store.latest.load;
+  // V1.2: the load range is the actuator's capability at 100 rad/s, reported
+  // by the backend as params.loadMaxTorque (0.1616 @24V, 0.0549 @12V). The
+  // backend clamps any larger value, so the slider tops out at the same number.
+  const loadMax = Math.max(0.01, store.latest.params.loadMaxTorque);
 
   return (
     <div className="panel">
@@ -58,16 +62,19 @@ export function LoadPanel() {
       <div className="field">
         <label>
           负载转矩 Torque
-          <span className="val">{torque.toFixed(2)} N·m</span>
+          <span className="val">{torque.toFixed(3)} N·m</span>
         </label>
         <input
           type="range"
           min={0}
-          max={2}
-          step={0.05}
-          value={torque}
+          max={loadMax}
+          step={0.005}
+          value={Math.min(torque, loadMax)}
           onChange={(e) => { const v = Number(e.target.value); setTorque(v); apply({ torque: v }); }}
         />
+        <div className="hint" style={{ marginTop: 2 }}>
+          量程 0 ~ {loadMax.toFixed(3)} N·m（100 rad/s 处最大转矩）
+        </div>
       </div>
 
       {mode === "periodic" && (

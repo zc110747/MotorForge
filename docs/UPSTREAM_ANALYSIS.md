@@ -81,10 +81,11 @@ rotor_angle ∈ [0, 2π) 电周期机械角
 控制链为：目标转矩 → FOC 电流环 → 电压 → PWM → 电机。没有任何"目标转速"概念。
 
 **处理方式（本项目唯一超出 upstream 的控制逻辑，放 Adapter 层）：**
-MotorForge 的 `simulation.target_speed` 由 Adapter 层速度 PI 实现：
+MotorForge 的 `simulation.target_speed` 由 Adapter 层速度 PID 实现（V1.1 起协议单位为
+rad/s，范围 [0, 400]；V1.1 新增 Kd 项，kd=0 等价纯 PI）：
 
 ```text
-target_speed [RPM] → speed PI（复用 upstream 的 pi_control/pi_unwind）
+target_speed [rad/s] → speed PID（复用 upstream 的 pi_control/pi_unwind + Adapter 级 D 项）
                   → 目标转矩 [Nm, 限幅]
                   → upstream get_desired_current_qd() → upstream FOC（原样）
 ```

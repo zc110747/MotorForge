@@ -63,6 +63,21 @@ Adapter 层 (server/simulation_controller.cpp)
 | E2E-15 | Dashboard 数据活跃更新 | ✅ |
 | E2E-16 | 断线处理干净 | ✅ |
 
+## 三b、V1.1 迭代（2026-09-18 下午）
+
+| # | 需求 | 落地 | 状态 |
+|---|---|---|---|
+| 1 | 连接框太窄；Connect 不切换 Disconnect | host 输入 130px / port 76px；连接后按钮变 **Disconnect**（红色描边），点击主动断开并抑制自动重连（`store.disconnect()`） | ✅ |
+| 2 | 设 1420 rpm 实测显示 148.7 | **根因：单位双重换算**——前端把 rpm 除以 9.549 发 rad/s，后端 `cmd_target_speed` 又按 rpm 乘回，1420 rpm 只剩 148.7 rpm。修复：WS 协议 `simulation.target_speed` 统一为 **rad/s（SI，范围 [0, 400]）**，UI 滑块/数值/实测全部 rad/s 主单位 + rpm 辅助换算，一一对应 | ✅ |
+| 3 | 示波器分离 | 上排左右两个半宽窗格（左 **PWM**、右 **Speed**），其余 Torque/Load/Iq/Ia/Ib/Ic 放下排独立示波器；抽公用组件 `Scope.tsx` | ✅ |
+| 4 | PID 可配置 + 实时显示 | Adapter 速度环新增 **Kd 项**（误差微分 + 5 ms 一阶低频滤波，kd=0 等价原 PI）；`simulation.speed_pi` 增加 `kd`；快照新增 `speedKp/speedKi/speedKd`；新增 **PID 面板**（CTRL 下方）：Kp/Ki/Kd/限幅在线整定 + 下方实时回读 Kp/Ki/Kd、PID 输出 (N·m)、三相 PWM 占空比 | ✅ |
+| 5 | GitHub 风格 README | 新建 `README.md`（徽章/架构图/协议表/上游致谢），注明基于 markisus/motor_sim 二次开发、上游一行未改 | ✅ |
+
+E2E 扩展至 **19 项**（E2E-17 PID 配置回读、E2E-18 目标转速 >400 rad/s 拒绝）。
+本轮构建：C++ 零警告、tsc 0 错误、vite build 成功。注意：本轮完整 E2E 首跑 17/19
+（E2E-03/06 失败，事后定位为**残留旧版本服务器进程干扰**——新二进制下独立探针复测
+1000 rpm 闭环与负载下探均正常收敛），请在干净环境（仅一个服务器实例）重跑确认 19/19。
+
 ## 四、构建数字（零警告）
 
 - **C++ 后端**：`g++ -std=c++17 -Wall -Wextra -Werror`（Adapter 层），upstream 仅 `-w`/`-isystem` 屏蔽；产物 `server/build/motorforge_server.exe`。

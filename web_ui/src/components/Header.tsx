@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { store, rpmOf } from "../sim/store";
+import { store } from "../sim/store";
 
 const RAD2DEG = 180 / Math.PI;
 
@@ -8,11 +8,16 @@ export function Header() {
   const [port, setPort] = useState(18098);
 
   const s = store.latest;
-  const rpm = rpmOf(s);
+  const speedRad = s.rotor.mechanicalSpeed;
   const angleDeg = (s.rotor.angle * RAD2DEG) % 360;
 
-  const dotClass =
-    store.conn === "open" ? "open" : store.conn === "connecting" ? "connecting" : "closed";
+  const open = store.conn === "open";
+  const dotClass = open ? "open" : store.conn === "connecting" ? "connecting" : "closed";
+
+  const onButton = () => {
+    if (open) store.disconnect();
+    else store.connect(host, port);
+  };
 
   return (
     <div className="topbar">
@@ -23,16 +28,29 @@ export function Header() {
       <div className="conn">
         <span className={`conn-dot ${dotClass}`} />
         <span style={{ color: "var(--text-dim)" }}>
-          {store.conn === "open" ? "WS Connected" : store.conn === "connecting" ? "Connecting…" : "Disconnected"}
+          {open ? "WS Connected" : store.conn === "connecting" ? "Connecting…" : "Disconnected"}
         </span>
-        <input value={host} onChange={(e) => setHost(e.target.value)} title="host" />
         <input
+          className="host"
+          value={host}
+          onChange={(e) => setHost(e.target.value)}
+          title="host"
+          spellCheck={false}
+        />
+        <input
+          className="port"
           type="number"
           value={port}
           onChange={(e) => setPort(Number(e.target.value))}
           title="port"
         />
-        <button onClick={() => store.connect(host, port)}>Connect</button>
+        <button
+          className={open ? "disconnect" : ""}
+          onClick={onButton}
+          title={open ? "断开连接" : "连接仿真服务器"}
+        >
+          {open ? "Disconnect" : "Connect"}
+        </button>
       </div>
 
       {store.error && <div className="error-note">{store.error}</div>}
@@ -40,7 +58,9 @@ export function Header() {
       <div className="top-readouts">
         <div className="top-readout">
           <div className="k">ACTUAL SPEED</div>
-          <div className="v">{rpm.toFixed(1)}</div>
+          <div className="v">
+            {speedRad.toFixed(1)}<span className="u"> rad/s</span>
+          </div>
         </div>
         <div className="top-readout">
           <div className="k">ROTOR ANGLE</div>

@@ -10,6 +10,9 @@ sys.path.insert(0, "tools")
 from ws_client import WsClient  # noqa: E402
 
 RPM = 60.0 / (2 * math.pi)
+RAD_S = 2 * math.pi / 60  # rpm -> rad/s
+# V1.2: simulation.target_speed value is in rad/s, valid range [1, 100].
+TARGET_SPEED_MAX = 100
 
 
 def rpm(s):
@@ -20,15 +23,15 @@ def collect(ws, seconds, kind="simulation.state"):
     return [m["data"] for m in ws.drain(seconds) if m["type"] == kind]
 
 
-def wait_speed(ws, target, tol, timeout):
-    """Poll until |speed - target| < tol (wall-clock timeout)."""
+def wait_speed(ws, target_rpm, tol, timeout):
+    """Poll until |speed - target_rpm| < tol (wall-clock timeout)."""
     deadline = time.time() + timeout
     last = None
     while time.time() < deadline:
         frames = collect(ws, 1.0)
         if frames:
             last = frames[-1]
-            if abs(rpm(last) - target) < tol:
+            if abs(rpm(last) - target_rpm) < tol:
                 return last
     return last
 
@@ -47,15 +50,16 @@ def main():
     ws = WsClient(port=args.port)
     check("E2E-01 WebSocket connect", True, "port %d" % args.port)
 
-    # --- E2E-02/03: start + target speed closed loop ---
+    # --- E2E-02/03: start + target speed closed loop (1..100 rad/s) ---
     ws.send({"type": "simulation.reset"})
     ws.drain(0.3)
-    ws.send({"type": "simulation.target_speed", "value": 1000})
+    ws.send({"type": "simulation.target_speed", "value": 100})
     ws.send({"type": "simulation.start"})
-    s = wait_speed(ws, 1000, 30, 90)
+    s = wait_speed(ws, 100 * RPM, 30, 90)
     check("E2E-02 simulation.status running", s["status"] == "running", s["status"])
     v0 = rpm(s)
-    check("E2E-03 target speed reached", abs(v0 - 1000) < 30, "%.1f rpm" % v0)
+    check("E2E-03 target speed reached (100 rad/s)", abs(v0 - 100 * RPM) < 30,
+          "%.1f rpm (%.1f rad/s)" % (v0, v0 / RPM))
 
     # --- E2E-13: single-source state (fields move together) ---
     moving = all(
@@ -107,6 +111,41 @@ def main():
              "enabled": False})
     ws.drain(0.3)
 
+    # --- E2E-19: load is clamped to actuator capability at 100 rad/s ---
+    # (fix for the earlier "negative speed under load" artifact). A resistive
+    # load far above the motor's torque envelope must be clamped, and the rotor
+    # must never reverse.
+    seq = collect(ws, 0.5)
+    lmt = seq[-1]["params"]["loadMaxTorque"]
+    ws.send({"type": "load.configure", "mode": "manual",
+             "torque": max(5.0, lmt * 5), "enabled": True})
+    seq = collect(ws, 3.0)
+    applied = [x["mechanical"]["loadTorque"] for x in seq]
+    speeds = [x["rotor"]["mechanicalSpeed"] for x in seq]
+    tcmds = [x["control"]["targetTorque"] for x in seq]
+    check("E2E-19a load clamped to capability",
+          max(applied) <= lmt + 1e-3 and max(tcmds) <= lmt + 1e-3,
+          "maxApplied=%.4f maxTcmd=%.4f cap=%.4f" % (max(applied), max(tcmds), lmt))
+    check("E2E-19b no negative speed under overload",
+          min(speeds) >= -1e-6, "minSpeed=%.3f" % min(speeds))
+    ws.send({"type": "load.configure", "mode": "manual", "torque": 0.0,
+             "enabled": False})
+    ws.drain(1.0)
+
+    # --- E2E-20: bus voltage only accepts 12/24 V ---
+    ws.send({"type": "motor.parameter", "name": "bus_voltage", "value": 48})
+    errs = [m for m in ws.drain(1.0) if m["type"] == "simulation.error"]
+    check("E2E-20a 48 V rejected",
+          len(errs) > 0, errs[0]["message"] if errs else "no error")
+    ws.send({"type": "motor.parameter", "name": "bus_voltage", "value": 12})
+    ws.drain(0.5)
+    seq = collect(ws, 0.5)
+    lmt12 = seq[-1]["params"]["loadMaxTorque"]
+    check("E2E-20b 12 V accepted, lower torque envelope",
+          lmt12 < lmt + 1e-3, "12V cap=%.4f vs 24V cap=%.4f" % (lmt12, lmt))
+    ws.send({"type": "motor.parameter", "name": "bus_voltage", "value": 24})
+    ws.drain(0.5)
+
     # --- E2E-10/11: pause freezes sim time incl. periodic phase ---
     ws.send({"type": "simulation.pause"})
     s = collect(ws, 0.5)[-1]
@@ -131,7 +170,7 @@ def main():
           "status=%s t=%.3f" % (s["status"], s["timestamp"]))
 
     # --- E2E-14: PWM duties real ---
-    ws.send({"type": "simulation.target_speed", "value": 500})
+    ws.send({"type": "simulation.target_speed", "value": 500 * RAD_S})
     ws.send({"type": "simulation.start"})
     wait_speed(ws, 500, 20, 60)
     s = collect(ws, 0.5)[-1]
@@ -147,6 +186,24 @@ def main():
             s1["rotor"]["angle"] != s2["rotor"]["angle"])
     check("E2E-15 dashboard data live", live,
           "t %.3f -> %.3f" % (s1["timestamp"], s2["timestamp"]))
+
+    # --- E2E-17: speed PID gains configurable + readback (V1.1) ---
+    ws.send({"type": "simulation.speed_pi", "kp": 0.8, "ki": 6.0,
+             "kd": 0.01, "torque_limit": 1.5})
+    ws.drain(0.3)
+    s = collect(ws, 0.4)[-1]
+    c = s["control"]
+    ok = (abs(c["speedKp"] - 0.8) < 1e-9 and
+          abs(c["speedKi"] - 6.0) < 1e-9 and
+          abs(c["speedKd"] - 0.01) < 1e-9)
+    check("E2E-17 speed PID gains readback", ok,
+          "Kp=%.2f Ki=%.2f Kd=%.3f" % (c["speedKp"], c["speedKi"], c["speedKd"]))
+
+    # --- E2E-18: target speed out of range is rejected (V1.2: >100 rad/s) ---
+    ws.send({"type": "simulation.target_speed", "value": TARGET_SPEED_MAX + 50})
+    errs = [m for m in ws.drain(1.0) if m["type"] == "simulation.error"]
+    check("E2E-18 target_speed >100 rad/s rejected", len(errs) > 0,
+          errs[0]["message"] if errs else "no error message")
 
     # --- E2E-16: disconnect handling (client close is clean) ---
     ws.close()

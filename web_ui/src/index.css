@@ -72,10 +72,13 @@ body {
   width: 70px; background: var(--panel-2); border: 1px solid var(--border);
   color: var(--text); border-radius: 4px; padding: 3px 6px; font-family: var(--mono);
 }
+.conn input.host { width: 130px; }
+.conn input.port { width: 76px; }
 .conn button {
   background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
-  border-radius: 4px; padding: 3px 8px; cursor: pointer;
+  border-radius: 4px; padding: 3px 8px; cursor: pointer; min-width: 86px;
 }
+.conn button.disconnect { border-color: var(--red); color: var(--red); }
 .conn button:hover { border-color: var(--accent); }
 
 /* ---- layout ---- */
@@ -162,11 +165,48 @@ input[type="number"] {
 
 /* ---- oscilloscope ---- */
 .scope-wrap { position: relative; }
-.scope { width: 100%; height: 220px; display: block; background: #0a0e14;
+.scope-row { display: flex; gap: 8px; margin-bottom: 8px; }
+.scope-half { flex: 1; min-width: 0; }
+.scope-box { min-width: 0; }
+.scope-title {
+  font-family: var(--mono); font-size: 10px; letter-spacing: 1px;
+  color: var(--text-dim); margin-bottom: 4px;
+}
+.scope { width: 100%; height: 200px; display: block; background: #0a0e14;
   border-radius: 6px; border: 1px solid var(--border); }
-.scope-legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 8px; }
+.scope.scope-sm { height: 150px; }
+.scope-legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 6px; }
 .scope-legend span { display: flex; align-items: center; gap: 5px; color: var(--text-dim); }
 .scope-legend i { width: 12px; height: 3px; border-radius: 2px; display: inline-block; }
+
+/* V1.2: 3-window scope layout — tall speed left, PWM+SIGNALS stacked right. */
+.scope-3col { display: flex; gap: 8px; align-items: stretch; }
+.scope-stack { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.scope-tall { flex: 1; min-width: 0; display: flex; }
+.scope-tall > .scope-box { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.scope-tall .scope-box .scope { flex: 1 1 auto; height: auto; min-height: 300px; }
+
+/* segmented (voltage) control */
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.seg-btn { background: transparent; color: var(--text-dim); border: 0; padding: 6px 14px;
+  font-family: var(--mono); font-size: 12px; cursor: pointer; }
+.seg-btn.active { background: var(--accent, #2563eb); color: #fff; }
+.seg-btn + .seg-btn { border-left: 1px solid var(--border); }
+
+/* ---- pid panel ---- */
+.pid-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; }
+.pid-grid .field { margin-bottom: 6px; }
+.pid-live {
+  display: flex; flex-wrap: wrap; gap: 4px 14px;
+  margin-top: 10px; padding: 8px 10px;
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px;
+  color: var(--text-dim); font-size: 11px;
+}
+.pid-live b { font-family: var(--mono); color: var(--accent); font-weight: 500; }
+
+/* ---- control panel ---- */
+.target-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.target-row .conv { color: var(--text-dim); font-family: var(--mono); font-size: 11px; white-space: nowrap; }
 
 /* ---- misc ---- */
 .error-note { color: var(--red); font-family: var(--mono); font-size: 11px; }

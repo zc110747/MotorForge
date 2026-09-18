@@ -35,9 +35,12 @@ struct Snapshot {
     double vd = 0; // V (foc.voltage_qd.imag())
     double vq = 0; // V (foc.voltage_qd.real())
 
-    // control (adapter speed loop + upstream FOC)
+    // control (adapter speed PID + upstream FOC)
     double target_speed = 0;    // rad/s
     double speed_error = 0;     // rad/s
+    double speed_kp = 0;        // V1.1: speed loop Kp (adapter)
+    double speed_ki = 0;        // V1.1: speed loop Ki (adapter)
+    double speed_kd = 0;        // V1.1: speed loop Kd (adapter)
     double target_torque = 0;   // N*m (speed loop output or manual torque)
     double target_iq = 0;       // A  (get_desired_current_qd output)
     double target_id = 0;       // A
@@ -67,6 +70,7 @@ struct Snapshot {
     double bEmf0 = 0.01;            // N*m/A (normed_bEmf_coeffs(0))
     double dt = 1e-6;               // s (read-only, upstream fixed)
     double speed_scale = 2;         // adapter: sim seconds per wall second
+    double load_max_torque = 0;     // N*m, actuator capability at 100 rad/s (V1.2)
 };
 
 // --- JSON writer helpers (shared by state/status/load messages) ---
@@ -158,6 +162,9 @@ inline std::string state_message(const Snapshot& s) {
     o += ",\"control\":{";
     kv_num("targetSpeed", s.target_speed, &o, false);
     kv_num("speedError", s.speed_error, &o, true);
+    kv_num("speedKp", s.speed_kp, &o, true);
+    kv_num("speedKi", s.speed_ki, &o, true);
+    kv_num("speedKd", s.speed_kd, &o, true);
     kv_num("targetTorque", s.target_torque, &o, true);
     kv_num("targetIq", s.target_iq, &o, true);
     kv_num("targetId", s.target_id, &o, true);
@@ -189,6 +196,7 @@ inline std::string state_message(const Snapshot& s) {
     kv_num("bEmf0", s.bEmf0, &o, true);
     kv_num("busVoltage", s.bus_voltage, &o, true);
     kv_num("dt", s.dt, &o, true);
+    kv_num("loadMaxTorque", s.load_max_torque, &o, true);
     o += "}";
     o += "}}";
     return o;

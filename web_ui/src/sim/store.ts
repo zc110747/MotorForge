@@ -43,6 +43,9 @@ export interface SimState {
   control: {
     targetSpeed: number;
     speedError: number;
+    speedKp: number;
+    speedKi: number;
+    speedKd: number;
     targetTorque: number;
     targetIq: number;
     targetId: number;
@@ -61,6 +64,7 @@ export interface SimState {
     busVoltage: number;
     dt: number;
     speedScale: number;
+    loadMaxTorque: number; // N*m, actuator capability at 100 rad/s (reported by backend, V1.2)
   };
 }
 
@@ -93,8 +97,9 @@ function zeroState(): SimState {
     },
     mechanical: { torque: 0, emTorque: 0, loadTorque: 0 },
     control: {
-      targetSpeed: 0, speedError: 0, targetTorque: 0,
-      targetIq: 0, targetId: 0, iqErr: 0, idErr: 0, speedMode: true,
+      targetSpeed: 0, speedError: 0, speedKp: 0, speedKi: 0, speedKd: 0,
+      targetTorque: 0, targetIq: 0, targetId: 0, iqErr: 0, idErr: 0,
+      speedMode: true,
     },
     pwm: { dutyA: 0, dutyB: 0, dutyC: 0, busVoltage: 24 },
     load: {
@@ -104,7 +109,8 @@ function zeroState(): SimState {
     },
     params: {
       numPolePairs: 4, phaseResistance: 1, phaseInductance: 1e-3,
-      rotorInertia: 0.1, bEmf0: 0.01, busVoltage: 24, dt: 1e-6, speedScale: 2,
+      rotorInertia: 0.005, bEmf0: 0.01, busVoltage: 24, dt: 1e-6, speedScale: 2,
+      loadMaxTorque: 0.16,
     },
   };
 }
@@ -120,6 +126,7 @@ export class SimStore {
   private ws: WebSocket | null = null;
   private url = "";
   private reconnectTimer: number | null = null;
+  private manualClose = false; // V1.1: user pressed Disconnect — no auto-reconnect
 
   private samples: Sample[] = [];
   private capacity = 600; // ~12 s at 50 Hz
@@ -142,8 +149,26 @@ export class SimStore {
   }
 
   connect(host: string, port: number) {
+    this.manualClose = false;
     this.url = `ws://${host}:${port}/ws`;
     this.open();
+  }
+
+  // V1.1: user-initiated disconnect. Closes the socket and suppresses the
+  // auto-reconnect until the next explicit connect().
+  disconnect() {
+    this.manualClose = true;
+    if (this.reconnectTimer != null) {
+      window.clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    if (this.ws) {
+      this.ws.onopen = this.ws.onclose = this.ws.onerror = this.ws.onmessage = null;
+      try { this.ws.close(); } catch { /* ignore */ }
+      this.ws = null;
+    }
+    this.conn = "closed";
+    this.notifyStatus();
   }
 
   private open() {
@@ -183,6 +208,7 @@ export class SimStore {
   }
 
   private scheduleReconnect() {
+    if (this.manualClose) return;
     if (this.reconnectTimer != null) return;
     this.reconnectTimer = window.setTimeout(() => {
       this.reconnectTimer = null;

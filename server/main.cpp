@@ -72,8 +72,9 @@ void handle_text(WsServer& ws, SimulationController& sim, uint64_t client,
     } else if (type == "simulation.speed_pi") {
         const double kp = v.get_num("kp", -1);
         const double ki = v.get_num("ki", -1);
+        const double kd = v.get_num("kd", 0); // V1.1: optional, default off
         const double limit = v.get_num("torque_limit", -1);
-        if (!sim.cmd_speed_pi(kp, ki, limit))
+        if (!sim.cmd_speed_pi(kp, ki, kd, limit))
             send_error(ws, client, "speed_pi parameters invalid");
     } else if (type == "simulation.speed_scale") {
         const double value = v.get_num("value", 0);

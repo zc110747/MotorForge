@@ -1,12 +1,13 @@
-import { store, rpmOf } from "../sim/store";
+import { store } from "../sim/store";
 
 const RAD2RPM = 60 / (2 * Math.PI);
 
 export function Dashboard() {
   const s = store.latest;
-  const actual = rpmOf(s);
-  const target = s.control.targetSpeed * RAD2RPM;
+  const actual = s.rotor.mechanicalSpeed; // rad/s
+  const target = s.control.targetSpeed;   // rad/s
   const err = target - actual;
+  const rpm = (v: number) => v * RAD2RPM;
 
   return (
     <div className="panel">
@@ -15,15 +16,17 @@ export function Dashboard() {
       <div className="stat-grid" style={{ marginBottom: 10 }}>
         <div className="stat">
           <div className="k">Target Speed</div>
-          <div className="v">{target.toFixed(0)}<span className="u">rpm</span></div>
+          <div className="v">{target.toFixed(1)}<span className="u">rad/s</span></div>
+          <div className="k">{rpm(target).toFixed(0)} rpm</div>
         </div>
         <div className="stat">
           <div className="k">Actual Speed</div>
-          <div className="v" style={{ color: "var(--accent)" }}>{actual.toFixed(1)}<span className="u">rpm</span></div>
+          <div className="v" style={{ color: "var(--accent)" }}>{actual.toFixed(1)}<span className="u">rad/s</span></div>
+          <div className="k">{rpm(actual).toFixed(0)} rpm</div>
         </div>
         <div className="stat">
           <div className="k">Speed Error</div>
-          <div className="v">{err.toFixed(1)}<span className="u">rpm</span></div>
+          <div className="v">{err.toFixed(1)}<span className="u">rad/s</span></div>
         </div>
         <div className="stat">
           <div className="k">Em. Torque</div>

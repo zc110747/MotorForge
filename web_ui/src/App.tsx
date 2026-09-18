@@ -3,6 +3,7 @@ import { store } from "./sim/store";
 import { useFrameTick } from "./sim/useFrameTick";
 import { Header } from "./components/Header";
 import { ControlPanel } from "./components/ControlPanel";
+import { PidPanel } from "./components/PidPanel";
 import { LoadPanel } from "./components/LoadPanel";
 import { CsvPanel } from "./components/CsvPanel";
 import { Dashboard } from "./components/Dashboard";
@@ -24,6 +25,7 @@ export function App() {
       <div className="body">
         <div className="col">
           <ControlPanel />
+          <PidPanel />
           <LoadPanel />
           <CsvPanel />
         </div>

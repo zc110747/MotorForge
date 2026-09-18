@@ -7,8 +7,6 @@
 #include <cstdio>
 
 namespace {
-constexpr Scalar kRpmPerRadS = 60.0 / (2.0 * kPI);
-constexpr Scalar kRadSPerRpm = 2.0 * kPI / 60.0;
 // wall tick for the realtime pacing loop
 constexpr auto kWallTick = std::chrono::milliseconds(2);
 // clamp sim steps per wall tick (prevents catch-up avalanche after stalls)
@@ -23,12 +21,13 @@ inline double sim_time_now() {
 SimulationController::SimulationController(BroadcastFn on_broadcast)
     : broadcast_(std::move(on_broadcast)) {
     // adapter: default speed-loop gains. Plant is ~integrator (domega/dt =
-    // T/J, J=0.1), so Kp ~ J*wc, Ki ~ J*wc^2/5 with wc = 20 rad/s. Tunable
-    // at runtime via simulation.speed_pi.
-    speed_pi_params_.p_gain = 0.5; // N*m per rad/s
-    speed_pi_params_.i_gain = 5.0; // N*m per rad
+    // T/J, J=0.01), so a modest Kp saturates the loop during spin-up and the
+    // integral pulls it to the setpoint. Tunable at runtime via
+    // simulation.speed_pi. The torque clamp itself is set by recompute_limits()
+    // (called from reset_state below) from the bus/bEmf, not hard-coded.
+    speed_pi_params_.p_gain = 0.05; // N*m per rad/s
+    speed_pi_params_.i_gain = 0.5;  // N*m per rad
     speed_pi_params_.bias = 0;
-    speed_torque_limit_ = 2.0;     // N*m
     reset_state();
 }
 
@@ -63,7 +62,11 @@ void SimulationController::reset_state() {
     // adapter state reset
     speed_pi_ctx_ = PiContext{};
     speed_pi_params_.bias = 0;
+    speed_d_filtered_ = 0;
+    speed_last_err_ = 0;
     load_phase_start_time_ = 0;
+
+    recompute_limits(); // derive torque clamp + load range from current params
 
     status_ = SimStatus::STOPPED;
     force_status_broadcast_ = true;
@@ -109,10 +112,12 @@ void SimulationController::cmd_reset() {
     reset_state();
 }
 
-bool SimulationController::cmd_target_speed(double rpm) {
-    if (!std::isfinite(rpm) || rpm < 0 || rpm > 100000) return false;
+bool SimulationController::cmd_target_speed(double rad_s) {
+    // V1.2: value is rad/s (SI), matching upstream. Range [0, 100] rad/s
+    // (the UI slider spans 1..100 rad/s).
+    if (!std::isfinite(rad_s) || rad_s < 0 || rad_s > 100) return false;
     std::lock_guard<std::mutex> lk(mtx_);
-    target_speed_rads_ = rpm * kRadSPerRpm;
+    target_speed_rads_ = rad_s;
     return true;
 }
 
@@ -131,15 +136,18 @@ bool SimulationController::cmd_control_mode(const std::string& mode) {
     return true;
 }
 
-bool SimulationController::cmd_speed_pi(double kp, double ki,
+bool SimulationController::cmd_speed_pi(double kp, double ki, double kd,
                                         double torque_limit) {
-    if (!std::isfinite(kp) || !std::isfinite(ki) || kp < 0 || ki < 0 ||
+    if (!std::isfinite(kp) || !std::isfinite(ki) || !std::isfinite(kd) ||
+        kp < 0 || ki < 0 || kd < 0 ||
         !std::isfinite(torque_limit) || torque_limit <= 0)
         return false;
     std::lock_guard<std::mutex> lk(mtx_);
     speed_pi_params_.p_gain = kp;
     speed_pi_params_.i_gain = ki;
     speed_pi_params_.bias = 0;
+    speed_kd_ = kd;
+    speed_d_filtered_ = 0;
     speed_torque_limit_ = torque_limit;
     return true;
 }
@@ -160,7 +168,12 @@ bool SimulationController::cmd_load_configure(const LoadConfig& cfg) {
          cfg.on_duration <= 0 || cfg.off_duration <= 0))
         return false;
     std::lock_guard<std::mutex> lk(mtx_);
-    load_ = cfg;
+    LoadConfig applied = cfg;
+    // Clamp to the actuator's capability at 100 rad/s (load_max_torque_) so the
+    // rotor can always hold the set load and never reverses under a resistive
+    // load. This is the fix for the earlier "negative speed under load" artifact.
+    if (applied.torque > load_max_torque_) applied.torque = load_max_torque_;
+    load_ = applied;
     // restart phase timing from the current simulation instant
     load_phase_start_time_ = state_.time;
     return true;
@@ -172,7 +185,8 @@ bool SimulationController::cmd_motor_parameter(const std::string& name,
     if (!std::isfinite(value)) return bad("value must be finite");
     std::lock_guard<std::mutex> lk(mtx_);
     if (name == "bus_voltage") {
-        if (value <= 0 || value > 1000) return bad("bus_voltage out of range");
+        // V1.2: only 12 V / 24 V are supported (realistic battery rails).
+        if (value != 12 && value != 24) return bad("bus_voltage must be 12 or 24");
         bus_voltage_ = value;
         state_.board.bus_voltage = value;
     } else if (name == "phase_resistance") {
@@ -203,7 +217,40 @@ bool SimulationController::cmd_motor_parameter(const std::string& name,
     } else {
         return bad("unknown parameter: " + name);
     }
+    recompute_limits(); // torque/load limits depend on these params
     return true;
+}
+
+// --- actuator torque envelope (V1.2) --------------------------------------
+
+double SimulationController::max_torque_at(double omega) const {
+    // Voltage-limited torque the FOC can deliver at mechanical speed `omega`.
+    // In the dq frame (id = 0): Vd = -we*L*iq, Vq = R*iq + we*lambda, where
+    // lambda = Kt = kClarkeScale*bEmf0*1.5 and we = omega*num_pole_pairs.
+    // Upstream caps |Vqd| at bus_voltage*kClarkeScale, so solve
+    //   (a*iq)^2 + (b*iq + c)^2 = Vmax^2   with a=we*L, b=R, c=we*lambda
+    // for the non-negative iq, then T = lambda*iq.
+    const double kc = kClarkeScale;  // sqrt(2/3), exported by upstream
+    const double lambda = kc * bEmf0_ * 1.5;
+    const double Vmax = bus_voltage_ * kc;
+    const double we = omega * num_pole_pairs_;
+    const double a = we * phase_inductance_;
+    const double b = phase_resistance_;
+    const double c = we * lambda;
+    const double disc = b * b * c * c - (a * a + b * b) * (c * c - Vmax * Vmax);
+    if (disc <= 0) return 0;  // back-EMF already exceeds the bus at this speed
+    const double iq = (-b * c + std::sqrt(disc)) / (a * a + b * b);
+    return lambda * iq;       // N*m
+}
+
+void SimulationController::recompute_limits() {
+    // Load range upper bound = actuator capability at 100 rad/s (the top of the
+    // speed slider), with a 5% safety margin so a full-scale load can always be
+    // held. The speed loop's torque clamp is set to the same value so it never
+    // commands torque the motor cannot deliver within the 0..100 rad/s range.
+    load_max_torque_ = max_torque_at(100.0) * 0.95;
+    if (load_max_torque_ < 1e-4) load_max_torque_ = 1e-4;
+    speed_torque_limit_ = load_max_torque_;
 }
 
 // --- core stepping (mirrors upstream simulator.cpp FOC loop) --------------
@@ -232,14 +279,28 @@ void SimulationController::update_load() {
 }
 
 void SimulationController::update_speed_loop() {
-    // adapter: speed PI over upstream pi_control. Runs at the FOC rate
+    // adapter: speed PID over upstream pi_control. Runs at the FOC rate
     // (state.foc.period), output clamped to +/- speed_torque_limit_ with
-    // upstream's own anti-windup back-calculation.
+    // upstream's own anti-windup back-calculation. V1.1 adds an
+    // adapter-level derivative branch (kd on speed error, first-order
+    // low-pass tau = 5 ms so the D term stays bounded at the 10 kHz FOC
+    // rate); kd = 0 reproduces the previous pure-PI behaviour exactly.
     if (speed_mode_) {
         const Scalar target = target_speed_rads_;
         const Scalar actual = state_.motor.kinematic.rotor_angular_vel;
         Scalar torque = pi_control(speed_pi_params_, &speed_pi_ctx_,
                                    state_.foc.period, actual, target);
+        if (speed_kd_ > 0) {
+            const Scalar dt_foc = state_.foc.period;
+            const Scalar d_err =
+                (speed_pi_ctx_.err - speed_last_err_) / dt_foc;
+            const Scalar tau = 0.005; // s, D-branch low-pass
+            const Scalar alpha = dt_foc / (dt_foc + tau);
+            speed_d_filtered_ =
+                alpha * (speed_kd_ * d_err) + (1 - alpha) * speed_d_filtered_;
+            torque += speed_d_filtered_;
+        }
+        speed_last_err_ = speed_pi_ctx_.err;
         if (torque > speed_torque_limit_) {
             pi_unwind(speed_pi_params_, speed_torque_limit_, &speed_pi_ctx_);
             torque = speed_torque_limit_;
@@ -334,6 +395,12 @@ void SimulationController::step_one() {
 
     step_motor(state_.dt, state_.load_torque, pole_voltages, &state_.motor);
 
+    // V1.2 safety: a resistive load can only slow/stall the rotor, never reverse
+    // it in this demo; clamp to >= 0 so the readout never shows the unphysical
+    // negative speed that previously appeared once load > motor torque.
+    if (state_.motor.kinematic.rotor_angular_vel < 0)
+        state_.motor.kinematic.rotor_angular_vel = 0;
+
     state_.time += state_.dt;
 }
 
@@ -376,6 +443,9 @@ void SimulationController::make_snapshot_locked(Snapshot* s) const {
 
     s->target_speed = target_speed_rads_;
     s->speed_error = target_speed_rads_ - kin.rotor_angular_vel;
+    s->speed_kp = speed_pi_params_.p_gain;
+    s->speed_ki = speed_pi_params_.i_gain;
+    s->speed_kd = speed_kd_;
     s->target_torque = target_torque_;
     s->target_iq = get_desired_current_qd(
         state_.foc_desired_torque,
@@ -417,6 +487,7 @@ void SimulationController::make_snapshot_locked(Snapshot* s) const {
     s->bEmf0 = state_.motor.params.normed_bEmf_coeffs(0);
     s->dt = state_.dt;
     s->speed_scale = speed_scale_;
+    s->load_max_torque = load_max_torque_;
 }
 
 void SimulationController::broadcast_status_locked() {
