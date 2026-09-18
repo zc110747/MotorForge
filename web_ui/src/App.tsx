@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { store } from "./sim/store";
+import { defaultWsHost, defaultWsPort } from "./sim/net";
 import { useFrameTick } from "./sim/useFrameTick";
 import { Header } from "./components/Header";
 import { ControlPanel } from "./components/ControlPanel";
@@ -16,7 +17,9 @@ export function App() {
   useFrameTick(30);
 
   useEffect(() => {
-    store.connect("127.0.0.1", 18098);
+    // Connect to the same host the page was served from, so LAN access works
+    // without reconfiguring anything (see sim/net.ts).
+    store.connect(defaultWsHost(), defaultWsPort());
   }, []);
 
   return (

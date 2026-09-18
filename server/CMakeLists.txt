@@ -27,7 +27,20 @@ target_include_directories(motorforge_server PRIVATE
 )
 
 if(WIN32)
-    target_link_libraries(motorforge_server PRIVATE ws2_32)
+    target_link_libraries(motorforge_server PRIVATE ws2_32 winmm)
+    # win_compat.h declares the same baseline in-code; keeping it here as well
+    # makes the requirement visible to CMake/IDE tooling (and guards against a
+    # toolchain that defaults _WIN32_WINNT below Vista, which hides
+    # CreateWaitableTimerExW / inet_pton and breaks the build).
+    target_compile_definitions(motorforge_server PRIVATE _WIN32_WINNT=0x0601)
     target_compile_options(motorforge_server PRIVATE
         $<$<CXX_COMPILER_ID:GNU>:-static -static-libgcc -static-libstdc++>)
+endif()
+
+# The adapter layer is held to zero warnings (-Wall -Wextra -Werror), matching
+# server/build.bat. The vendored upstream core is intentionally exempt.
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    set_source_files_properties(
+        main.cpp simulation_controller.cpp ws_server.cpp
+        PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra;-Werror")
 endif()

@@ -192,6 +192,14 @@ input[type="number"] {
   font-family: var(--mono); font-size: 12px; cursor: pointer; }
 .seg-btn.active { background: var(--accent, #2563eb); color: #fff; }
 .seg-btn + .seg-btn { border-left: 1px solid var(--border); }
+.seg.seg-sm .seg-btn { padding: 2px 9px; font-size: 11px; }
+
+/* scope window header: title on the left, range selector on the right */
+.scope-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; margin-bottom: 4px;
+}
+.scope-head .scope-title { margin-bottom: 0; }
 
 /* ---- pid panel ---- */
 .pid-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; }

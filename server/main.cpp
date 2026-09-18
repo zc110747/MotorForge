@@ -13,8 +13,10 @@
 #include <thread>
 
 #ifdef _WIN32
-#include <windows.h>
-#include <timeapi.h>
+// win_compat.h pins the WinAPI baseline to Windows 7 and resolves
+// timeBeginPeriod/timeEndPeriod from timeapi.h or mmsystem.h, whichever the
+// toolchain ships (see win_compat.h for the full story).
+#include "win_compat.h"
 #endif
 
 namespace {

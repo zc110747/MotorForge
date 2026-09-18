@@ -1,11 +1,14 @@
 import { useState } from "react";
 import { store } from "../sim/store";
+import { defaultWsHost, defaultWsPort } from "../sim/net";
 
 const RAD2DEG = 180 / Math.PI;
 
 export function Header() {
-  const [host, setHost] = useState("127.0.0.1");
-  const [port, setPort] = useState(18098);
+  // Defaults follow the page origin so LAN access works out of the box
+  // (see sim/net.ts); the fields remain editable as a manual override.
+  const [host, setHost] = useState(defaultWsHost);
+  const [port, setPort] = useState(defaultWsPort);
 
   const s = store.latest;
   const speedRad = s.rotor.mechanicalSpeed;

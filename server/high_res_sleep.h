@@ -5,7 +5,9 @@
 // (Win10 1803+) gives ~tens-of-us resolution. Falls back to Sleep() on
 // older systems.
 #ifdef _WIN32
-#include <windows.h>
+// win_compat.h raises the WinAPI baseline to Windows 7 (needed for
+// CreateWaitableTimerExW) and pulls in <windows.h>.
+#include "win_compat.h"
 
 #ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
 #define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002

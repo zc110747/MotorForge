@@ -72,6 +72,7 @@ export interface SimState {
 export interface Sample {
   t: number;
   rpm: number;
+  targetRpm: number; // setpoint at the same instant (for the deviation trace)
   torque: number;
   load: number;
   iq: number;
@@ -256,6 +257,7 @@ export class SimStore {
     const smp: Sample = {
       t: s.timestamp,
       rpm: s.rotor.mechanicalSpeed * RAD2RPM,
+      targetRpm: s.control.targetSpeed * RAD2RPM,
       torque: s.mechanical.torque,
       load: s.mechanical.loadTorque,
       iq: s.electrical.iq,
