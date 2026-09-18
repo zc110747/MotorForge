@@ -95,6 +95,13 @@ void SimulationController::cmd_stop() {
     std::lock_guard<std::mutex> lk(mtx_);
     if (status_ != SimStatus::STOPPED) {
         status_ = SimStatus::STOPPED;
+        // V1.2.2: a stopped motor has zero shaft speed and no integrator
+        // windup. Zero both so the oscilloscope reports the true rest state
+        // (0 rad/s) instead of the frozen last value (= the target once spun
+        // up). This also satisfies the "clear KI-accumulated gain on
+        // stop/reset" requirement.
+        state_.motor.kinematic.rotor_angular_vel = 0;
+        speed_pi_ctx_ = PiContext{};
         force_status_broadcast_ = true;
     }
 }
@@ -149,6 +156,12 @@ bool SimulationController::cmd_speed_pi(double kp, double ki, double kd,
     speed_kd_ = kd;
     speed_d_filtered_ = 0;
     speed_torque_limit_ = torque_limit;
+    // V1.2.2: disabling the integrator (ki == 0) must also drop any accumulated
+    // windup. Besides being the correct "pure-P reset", it prevents a subsequent
+    // saturation from dividing by i_gain == 0 inside pi_unwind() (which would
+    // inject Inf/NaN into the loop). With i_gain == 0 the integral term does not
+    // affect the output anyway, so clearing it is safe.
+    if (ki == 0) speed_pi_ctx_.integral = 0;
     return true;
 }
 
@@ -290,6 +303,12 @@ void SimulationController::update_speed_loop() {
         const Scalar actual = state_.motor.kinematic.rotor_angular_vel;
         Scalar torque = pi_control(speed_pi_params_, &speed_pi_ctx_,
                                    state_.foc.period, actual, target);
+        // V1.2.2: with a pure-proportional loop (i_gain == 0) the integrator
+        // term contributes nothing, so discard the accumulating windup. This also
+        // keeps the value finite: without this, a later saturation would call
+        // pi_unwind() which divides by i_gain == 0 and corrupts the loop with
+        // Inf/NaN (the previous "KI=0 does nothing / no change" symptom).
+        if (speed_pi_params_.i_gain == 0) speed_pi_ctx_.integral = 0;
         if (speed_kd_ > 0) {
             const Scalar dt_foc = state_.foc.period;
             const Scalar d_err =
@@ -302,10 +321,20 @@ void SimulationController::update_speed_loop() {
         }
         speed_last_err_ = speed_pi_ctx_.err;
         if (torque > speed_torque_limit_) {
-            pi_unwind(speed_pi_params_, speed_torque_limit_, &speed_pi_ctx_);
+            // pi_unwind() solves I = (sat - bias) / i_gain, so it must not be
+            // called with i_gain == 0 (would divide by zero -> Inf/NaN). With
+            // i_gain == 0 there is no integral term to back-calculate, so just
+            // clamp and drop the windup.
+            if (speed_pi_params_.i_gain > 0)
+                pi_unwind(speed_pi_params_, speed_torque_limit_, &speed_pi_ctx_);
+            else
+                speed_pi_ctx_.integral = 0;
             torque = speed_torque_limit_;
         } else if (torque < -speed_torque_limit_) {
-            pi_unwind(speed_pi_params_, -speed_torque_limit_, &speed_pi_ctx_);
+            if (speed_pi_params_.i_gain > 0)
+                pi_unwind(speed_pi_params_, -speed_torque_limit_, &speed_pi_ctx_);
+            else
+                speed_pi_ctx_.integral = 0;
             torque = -speed_torque_limit_;
         }
         state_.foc_desired_torque = torque;

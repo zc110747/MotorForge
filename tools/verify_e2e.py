@@ -205,6 +205,61 @@ def main():
     check("E2E-18 target_speed >100 rad/s rejected", len(errs) > 0,
           errs[0]["message"] if errs else "no error message")
 
+    # --- E2E-21..E2E-24: KI=0 proportional behaviour + stop->0 (V1.2.2) ---
+    # Bug 2: with the integrator disabled (ki == 0) the speed loop must behave
+    # as pure proportional control: it still reaches the setpoint with no load,
+    # but under a resistive load it balances at a steady-state *error* (droop =
+    # load / Kp) instead of driving the error to zero. The previous code called
+    # pi_unwind() with i_gain == 0 (divide-by-zero -> Inf/NaN), which corrupted
+    # the whole loop, so KI=0 appeared to "do nothing". Use a soft Kp so the
+    # droop is clearly measurable.
+    SOFT_KP = 0.02
+    ws.send({"type": "simulation.reset"})
+    ws.drain(0.3)
+    ws.send({"type": "simulation.speed_pi", "kp": SOFT_KP, "ki": 0.0,
+             "kd": 0.0, "torque_limit": 0.16})
+    ws.send({"type": "simulation.target_speed", "value": 100})
+    ws.send({"type": "simulation.start"})
+    s = wait_speed(ws, 100 * RPM, 30, 90)
+    v_no = rpm(s)
+    check("E2E-21 KI=0 no-load reaches target (finite, ~100 rad/s)",
+          math.isfinite(v_no) and abs(v_no - 100 * RPM) < 30,
+          "%.1f rad/s" % (v_no / RPM))
+
+    # apply a resistive load; pure-P cannot eliminate the steady-state error
+    ws.send({"type": "load.configure", "mode": "manual", "torque": 0.1,
+             "enabled": True})
+    seq = collect(ws, 3.0)
+    v_load = rpm(seq[-1])
+    droop = (v_no - v_load) / RPM  # rad/s below the no-load setpoint
+    check("E2E-22 KI=0 load -> droop (speed < target, finite)",
+          math.isfinite(v_load) and droop > 2.0,
+          "droop=%.1f rad/s (load=%.1f vs noload=%.1f)" %
+          (droop, v_load / RPM, v_no / RPM))
+
+    # re-enable the integrator: the same load no longer causes droop
+    ws.send({"type": "simulation.speed_pi", "kp": SOFT_KP, "ki": 0.5,
+             "kd": 0.0, "torque_limit": 0.16})
+    s = wait_speed(ws, 100 * RPM, 20, 30)
+    v_int = rpm(s)
+    check("E2E-23 KI>0 restores target under load (no droop)",
+          math.isfinite(v_int) and abs(v_int - 100 * RPM) < 20,
+          "%.1f rad/s" % (v_int / RPM))
+    ws.send({"type": "load.configure", "mode": "manual", "torque": 0.0,
+             "enabled": False})
+    ws.drain(1.0)
+
+    # Bug 1: after Stop the oscilloscope must show real rest speed (0 rad/s),
+    # not the frozen last value (= target once spun up).
+    ws.send({"type": "simulation.stop"})
+    seq = collect(ws, 1.0)
+    v_stop = seq[-1]["rotor"]["mechanicalSpeed"]
+    check("E2E-24 stop -> actual speed 0 (not frozen target)",
+          math.isfinite(v_stop) and v_stop < 1e-3,
+          "%.5f rad/s" % v_stop)
+    ws.send({"type": "simulation.reset"})
+    ws.drain(0.3)
+
     # --- E2E-16: disconnect handling (client close is clean) ---
     ws.close()
     check("E2E-16 disconnect clean", True)
