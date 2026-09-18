@@ -10,6 +10,8 @@
 //  - The 3D rotor rotation is driven ONLY by store.latest.rotor.angle.
 //    We never integrate angle on the client.
 
+import { modulationIndex } from "./pwm";
+
 export type SimStatus = "stopped" | "running" | "paused";
 
 export interface SimLoad {
@@ -82,6 +84,10 @@ export interface Sample {
   dA: number;
   dB: number;
   dC: number;
+  // Modulation index |V_qd| / (V_bus/2) at this instant. Unlike dA/dB/dC it is
+  // DC in steady state (the duties rotate at f_e ~ 64 Hz, the vector length
+  // does not), so it is the only "PWM" trace that stays readable. See sim/pwm.ts.
+  m: number;
 }
 
 const RAD2RPM = 60 / (2 * Math.PI);
@@ -131,9 +137,17 @@ export class SimStore {
 
   private samples: Sample[] = [];
   private capacity = 600; // ~12 s at 50 Hz
+  // Simulated seconds between the last two telemetry frames, measured from the
+  // `timestamp` deltas of the stream itself. Stays 0 until two frames arrive.
+  // The server's push loop overhead and `speed_scale` are both folded into this
+  // measurement, which is why it beats assuming speedScale/50.
+  frameDtSim = 0;
+  private lastTs = NaN;
 
   reset() {
     this.samples = [];
+    this.frameDtSim = 0;
+    this.lastTs = NaN;
   }
 
   getBuffer(): Sample[] {
@@ -254,6 +268,13 @@ export class SimStore {
   }
 
   private pushSample(s: SimState) {
+    // Measure the frame spacing before anything else: this is what decides
+    // whether a per-phase PWM duty can be read at all (see sim/pwm.ts).
+    if (Number.isFinite(this.lastTs)) {
+      const dt = s.timestamp - this.lastTs;
+      if (dt > 0) this.frameDtSim = dt;
+    }
+    this.lastTs = s.timestamp;
     const smp: Sample = {
       t: s.timestamp,
       rpm: s.rotor.mechanicalSpeed * RAD2RPM,
@@ -267,6 +288,7 @@ export class SimStore {
       dA: s.pwm.dutyA,
       dB: s.pwm.dutyB,
       dC: s.pwm.dutyC,
+      m: modulationIndex(s.electrical.vq, s.electrical.vd, s.pwm.busVoltage),
     };
     this.samples.push(smp);
     if (this.samples.length > this.capacity) this.samples.shift();

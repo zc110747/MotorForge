@@ -1,7 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import { store, Sample } from "../sim/store";
 
-export type Ch = "speed" | "speedDev" | "torque" | "load" | "iq" | "ia" | "ib" | "ic" | "pwm";
+export type Ch =
+  | "speed"
+  | "speedDev"
+  | "torque"
+  | "load"
+  | "iq"
+  | "ia"
+  | "ib"
+  | "ic"
+  | "pwm"
+  | "pwmM";
 
 export const CH_META: Record<
   Ch,
@@ -30,7 +40,16 @@ export const CH_META: Record<
   ia: { label: "Ia", color: "#60a5fa", pick: (s) => s.ia },
   ib: { label: "Ib", color: "#a78bfa", pick: (s) => s.ib },
   ic: { label: "Ic", color: "#fb923c", pick: (s) => s.ic },
-  pwm: { label: "PWM", color: "#e6edf3", pick: (s) => s.dA, fixed: [0, 1] },
+  // Per-phase duty of phase A. This is a ROTATING waveform at the electrical
+  // frequency f_e = n_pp*omega/2pi (63.7 Hz at 100 rad/s, 4 pole pairs), while
+  // the telemetry only carries ~25 frames per simulated second. In steady
+  // state the trace is therefore an aliased blur and is NOT meant to be read
+  // as a number - use pwmM for that.
+  pwm: { label: "PWM-A 相占空比", color: "#e6edf3", pick: (s) => s.dA, fixed: [0, 1] },
+  // Modulation index: the LENGTH of the same rotating vector. DC in steady
+  // state, so this trace stays readable, and it is the one that answers "how
+  // hard is the inverter working" (rises with speed via back-EMF and with load).
+  pwmM: { label: "PWM 调制比 m", color: "#67e8f9", pick: (s) => s.m },
 };
 
 interface ScopeProps {

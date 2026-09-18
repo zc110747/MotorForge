@@ -1,4 +1,5 @@
 import { store } from "../sim/store";
+import { pwmMetrics } from "../sim/pwm";
 
 const RAD2RPM = 60 / (2 * Math.PI);
 
@@ -8,6 +9,7 @@ export function Dashboard() {
   const target = s.control.targetSpeed;   // rad/s
   const err = target - actual;
   const rpm = (v: number) => v * RAD2RPM;
+  const pwm = pwmMetrics(s, store.frameDtSim);
 
   return (
     <div className="panel">
@@ -60,7 +62,7 @@ export function Dashboard() {
       </div>
 
       <div className="field" style={{ marginTop: 10 }}>
-        <label>PWM 占空比 Duty (0–1)</label>
+        <label>PWM 相占空比 Duty (0–1)</label>
         <div className="pwm-bars">
           {[["A", s.pwm.dutyA], ["B", s.pwm.dutyB], ["C", s.pwm.dutyC]].map(([k, v]) => (
             <div className="pwm-bar" key={k}>
@@ -68,6 +70,24 @@ export function Dashboard() {
               <div className="lab">{k} {(v as number).toFixed(2)}</div>
             </div>
           ))}
+        </div>
+        {/* The three bars above are the projection of ONE rotating voltage
+            vector, so they are meant to swing. These four numbers are the
+            aliasing-immune summary of the same snapshot (see sim/pwm.ts). */}
+        <div className="pid-live" style={{ marginTop: 6 }}>
+          <span>调制比 m <b>{pwm.m.toFixed(3)}</b></span>
+          <span>摆幅 <b>0.50 ± {pwm.amp.toFixed(3)}</b></span>
+          <span>电频率 f<sub>e</sub> <b>{pwm.fE.toFixed(1)}</b> Hz</span>
+          <span>帧间隔 <b>{pwm.frameDtSim > 0 ? (pwm.frameDtSim * 1000).toFixed(0) : "—"}</b> ms</span>
+          <span>帧/电周期 <b>{pwm.frameDtSim > 0 ? pwm.aliasPerFrame.toFixed(2) : "—"}</b></span>
+        </div>
+        <div className="hint">
+          三相占空比是同一个电压矢量在三相上的投影，以 f<sub>e</sub> = n<sub>pp</sub>·ω/2π 旋转。
+          空载时逆变器仍需输出反电动势电压（{pwm.m.toFixed(2)} · V<sub>bus</sub>/2 = {(pwm.m * s.pwm.busVoltage / 2).toFixed(2)} V），
+          因此并非恒定 0.5。遥测帧间隔 <b>实测</b> 为 ≈{pwm.frameDtSim > 0 ? (pwm.frameDtSim * 1000).toFixed(0) : "?"} ms
+          仿真时间，其间矢量转过 ≈{pwm.frameDtSim > 0 ? pwm.aliasPerFrame.toFixed(1) : "?"} 个电周期，
+          相占空比原始读数必然混叠 —— 要看 <b>m</b>（矢量长度，稳态即为常量）。
+          {pwm.limited ? " ⚠ m ≥ 1.414：已过调制，占空比被钳位在 0/1。" : ""}
         </div>
       </div>
 

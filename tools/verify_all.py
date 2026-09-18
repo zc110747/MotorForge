@@ -5,6 +5,8 @@
 #
 #   tools/verify_e2e.py      - transport / state machine / load / PID plumbing
 #   tools/verify_response.py - Kp, Ki x load-step dynamics (dip -> recover, droop)
+#   tools/verify_pwm.py      - SVPWM duties: back-EMF law, angle-domain proof
+#                              that the "jumping PWM" is aliasing, not noise
 #
 # Usage: python tools/verify_all.py [--port 0] [--keep-dumps DIR]
 #        --port 0 (default) picks a free port automatically, so the suite never
@@ -73,6 +75,8 @@ def main():
     suites = [
         ("E2E      ", ["tools/verify_e2e.py", "--port", str(port)], []),
         ("RESPONSE ", ["tools/verify_response.py", "--port", str(port)],
+         ["--dump-dir", args.keep_dumps] if args.keep_dumps else []),
+        ("PWM      ", ["tools/verify_pwm.py", "--port", str(port)],
          ["--dump-dir", args.keep_dumps] if args.keep_dumps else []),
     ]
 

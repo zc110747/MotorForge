@@ -34,7 +34,14 @@ const WEB_ROOT = path.resolve(HERE, '..', '..');   // web_ui/
 const REPO = path.resolve(WEB_ROOT, '..');         // repo root
 const DIST = path.join(WEB_ROOT, 'dist');
 const SIM_EXE = path.join(REPO, 'server', 'build', 'motorforge_server.exe');
-const SIM_PORT = Number(process.env.SIM_PORT ?? 18098);
+// The simulation server MUST run on a private port, and the page must be told
+// which one (see ?wsport in src/sim/net.ts). Hard-coding 18098 meant that if a
+// developer already had their own instance running (start.bat), this harness
+// silently attached to *that* server and asserted against its session state -
+// e.g. a 12 V bus, whose 0.0549 N*m actuator limit fails the preset check and
+// permanently droops under a 0.1 N*m load. The failures looked like code
+// regressions but were an environment collision.
+let SIM_PORT = Number(process.env.SIM_PORT ?? 0);
 const WEB_PORT = Number(process.env.WEB_PORT ?? 4174);
 const DEBUG_PORT = Number(process.env.DEBUG_PORT ?? 9346);
 const WIDTH = 1680;
@@ -81,6 +88,19 @@ async function waitPort(port, timeoutMs = 20000) {
     await sleep(200);
   }
   return false;
+}
+
+// Ask the OS for a free TCP port and hand it back. Used so the simulation
+// server never collides with an instance the developer already has running.
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const srv = createServer();
+    srv.on('error', reject);
+    srv.listen(0, '127.0.0.1', () => {
+      const { port } = srv.address();
+      srv.close(() => resolve(port));
+    });
+  });
 }
 
 // The simulation server speaks WebSocket only, so a plain HTTP GET is answered
@@ -196,6 +216,7 @@ async function main() {
     throw new Error(`missing web_ui/dist; run "npm run build" in web_ui first`);
   }
 
+  if (!SIM_PORT) SIM_PORT = await freePort();
   const sim = spawn(SIM_EXE, ['--port', String(SIM_PORT)], {
     cwd: path.join(REPO, 'server'), stdio: 'ignore',
   });
@@ -211,7 +232,10 @@ async function main() {
   const userDataDir = mkdtempSync(path.join(tmpdir(), 'motorforge-e2e-'));
   try {
     if (!(await waitTcp(SIM_PORT))) throw new Error('simulation server did not start');
-    console.log(`sim  server : ws://127.0.0.1:${SIM_PORT}/ws`);
+    if (sim.exitCode !== null) {
+      throw new Error(`simulation server exited immediately (port ${SIM_PORT} busy?)`);
+    }
+    console.log(`sim  server : ws://127.0.0.1:${SIM_PORT}/ws  (private instance)`);
     console.log(`web  server : http://127.0.0.1:${WEB_PORT}/`);
     console.log(`browser     : ${browserPath}\n`);
 
@@ -221,7 +245,7 @@ async function main() {
       '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader',
       '--hide-scrollbars', `--window-size=${WIDTH},${HEIGHT}`,
       `--user-data-dir=${userDataDir}`, `--remote-debugging-port=${DEBUG_PORT}`,
-      `http://127.0.0.1:${WEB_PORT}/`,
+      `http://127.0.0.1:${WEB_PORT}/?wsport=${SIM_PORT}`,
     ], { stdio: 'ignore' });
 
     let page = null;
@@ -335,6 +359,23 @@ async function main() {
       `Δ dip = ${devDip} rpm (${(devDip / 9.5493).toFixed(2)} rad/s)`);
     check('A6 ...and reports recovery to the setpoint', Math.abs(devTail) <= 3 && devRecover !== '未回归',
       `tail mean = ${devTail} rpm, adjustment = ${devRecover}`);
+
+    // --- the PWM readout must be honest about the aliasing it cannot show ---
+    // The three duty bars are the projection of a rotating vector; at 100 rad/s
+    // the electrical frequency is ~64 Hz while the telemetry only delivers one
+    // frame per ~43 ms of simulated time, so the raw bars are aliased by
+    // construction. The panel has to expose the aliasing-immune summary (the
+    // modulation index m) instead of leaving the user to read the bars.
+    const pwmRead = await cdp.evaluate(`(() => {
+      const dash = window.__mf.panel('DASH');
+      const b = Array.from(dash.querySelector('.pid-live').querySelectorAll('b'))
+        .map((x) => x.textContent.trim());
+      return { m: Number(b[0]), fe: Number(b[2]), frameMs: Number(b[3]), per: Number(b[4]) };
+    })()`);
+    check('A10 PWM panel exposes m and admits the aliasing',
+      pwmRead.m > 0.5 && pwmRead.m < 1.5 && pwmRead.frameMs >= 25 && pwmRead.per > 1,
+      `m=${pwmRead.m} (loaded, not 0.5), f_e=${pwmRead.fe} Hz, ` +
+      `frame=${pwmRead.frameMs} ms -> ${pwmRead.per} electrical cycles/frame`);
 
     const pxGlobalAfter = await cdp.evaluate(`window.__mf.trace()`);
 

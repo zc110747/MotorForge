@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Scope, Ch } from "./Scope";
 import { store } from "../sim/store";
+import { pwmMetrics } from "../sim/pwm";
 import { computeTransient } from "../sim/transient";
 
 // V1.2 layout - three oscilloscope windows:
@@ -36,6 +37,7 @@ export function Oscilloscope() {
   const rest: Ch[] = ["torque", "load", "iq", "ia", "ib", "ic"];
 
   const tr = computeTransient(store.getBuffer());
+  const pwm = pwmMetrics(store.latest, store.frameDtSim);
 
   const speedChannels: Ch[] = range === "dev" ? ["speedDev"] : ["speed"];
   const speedFixed = range === "global" ? SPEED_FULL_RANGE : undefined;
@@ -100,7 +102,20 @@ export function Oscilloscope() {
         {/* right: PWM (top) + Signals (bottom) stacked */}
         <div className="scope-stack">
           <div className="scope-half">
-            <Scope channels={["pwm"]} title="PWM" className="scope-sm" />
+            {/* Two traces on purpose: `pwm` is phase A's duty, which ROTATES at
+                f_e (63.7 Hz at 100 rad/s) and is aliased by the ~25 Hz
+                telemetry -> it looks like jitter by design. `pwmM` is the
+                length of that same vector: DC in steady state, so it is the
+                one to read, and the one that tracks back-EMF and load. */}
+            <Scope
+              channels={["pwmM", "pwm"]}
+              title={
+                pwm.frameDtSim > 0
+                  ? `PWM · m=${pwm.m.toFixed(3)} (${pwm.fE.toFixed(1)} Hz, ${pwm.aliasPerFrame.toFixed(1)} 电周期/帧)`
+                  : `PWM · m=${pwm.m.toFixed(3)}`
+              }
+              className="scope-sm"
+            />
           </div>
           <div className="scope-half">
             <Scope channels={rest} defaultOn={["torque", "load", "iq"]} title="SIGNALS" />

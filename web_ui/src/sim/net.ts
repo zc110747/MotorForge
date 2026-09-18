@@ -22,5 +22,17 @@ export function defaultWsHost(): string {
 }
 
 export function defaultWsPort(): number {
+  if (typeof window === "undefined") return DEFAULT_WS_PORT;
+  // ?wsport=NNNNN points the page at a private simulation server instead of the
+  // default 18098. The headless UI harness needs this: without it the test
+  // silently attaches to whatever server already owns 18098 - typically the one
+  // the developer launched with start.bat - and then asserts against *that*
+  // session's bus voltage and gains, which produces failures that look like
+  // regressions but are really an environment collision.
+  const raw = new URLSearchParams(window.location.search).get("wsport");
+  if (raw !== null) {
+    const q = Number(raw);
+    if (Number.isInteger(q) && q > 0 && q < 65536) return q;
+  }
   return DEFAULT_WS_PORT;
 }
